@@ -1,7 +1,7 @@
 import cv2
 
 # Load video
-cap = cv2.VideoCapture("traffic_video3.mp4")
+cap = cv2.VideoCapture("traffic_video1.mp4")
 
 # Background subtractor
 fgbg = cv2.createBackgroundSubtractorMOG2(history=100, varThreshold=50)

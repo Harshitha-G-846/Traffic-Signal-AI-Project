@@ -4,7 +4,7 @@ import cv2
 cap = cv2.VideoCapture("traffic_video1.mp4")
 
 # Background subtractor
-fgbg = cv2.createBackgroundSubtractorMOG2(history=100, varThreshold=50)
+fgbg = cv2.createBackgroundSubtractorMOG2(history=500, varThreshold=40, detectShadows=True)
 
 # Accident flag
 accident = False
@@ -20,7 +20,10 @@ while True:
 
     # Threshold to remove shadows/noise
     _, thresh = cv2.threshold(fgmask, 200, 255, cv2.THRESH_BINARY)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5,5))
 
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
     # Find contours
     contours, _ = cv2.findContours(thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -30,7 +33,7 @@ while True:
     for cnt in contours:
         area = cv2.contourArea(cnt)
 
-        if area > 800:  # Adjust this if needed
+        if area > 700:  # Adjust this if needed
             x, y, w, h = cv2.boundingRect(cnt)
             cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
             vehicle_count += 1

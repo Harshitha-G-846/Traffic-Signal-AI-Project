@@ -2,6 +2,9 @@ import cv2
 from ultralytics import YOLO
 import serial
 import time
+import csv
+import os
+from datetime import datetime
 
 # ==========================================================
 # SETTINGS
@@ -19,9 +22,9 @@ CONFIDENCE_THRESHOLD = 0.35
 SPLIT_RATIO = 0.53
 
 # Traffic thresholds (weighted score based)
-LOW_THRESHOLD = 15      # score < 15  -> 10 sec green
-MEDIUM_THRESHOLD = 30   # score < 30  -> 15 sec green
-# score >= 30           -> 20 sec green
+LOW_THRESHOLD = 10      # score < 10  -> 10 sec green
+MEDIUM_THRESHOLD = 20   # score < 20  -> 15 sec green
+# score >= 20           -> 20 sec green
 
 # Vehicle weights
 VEHICLE_WEIGHTS = {
@@ -32,8 +35,10 @@ VEHICLE_WEIGHTS = {
 }
 
 # Timing constants
-YELLOW_TIME = 3
-ALL_RED_TIME = 6
+YELLOW_TIME = 2
+ALL_RED_TIME = 4
+
+LOG_FILE = "traffic_log.csv"
 
 # ==========================================================
 # CONNECT TO ARDUINO
@@ -49,6 +54,21 @@ print("Arduino connected.")
 print("Loading YOLO model...")
 model = YOLO(MODEL_NAME)
 print("Model loaded.")
+
+if not os.path.exists(LOG_FILE):
+    with open(LOG_FILE, 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            "Timestamp",
+            "Road A Count",
+            "Road B Count",
+            "Road A Score",
+            "Road B Score",
+            "Active Road",
+            "Green Time",
+            "Phase",
+            "Emergency"
+        ])
 
 # ==========================================================
 # VIDEO SOURCE
@@ -92,13 +112,36 @@ ESC -> Exit
 # ==========================================================
 # FUNCTIONS
 # ==========================================================
-def get_green_time(score):
-    if score < LOW_THRESHOLD:
-        return 10
-    elif score < MEDIUM_THRESHOLD:
-        return 15
+def bayesian_congestion(score):
+    # Example priors
+    prior_low = 0.33
+    prior_medium = 0.33
+    prior_high = 0.34
+
+    # Simple likelihood model
+    if score < 15:
+        likelihood_low, likelihood_medium, likelihood_high = 0.8, 0.15, 0.05
+    elif score < 30:
+        likelihood_low, likelihood_medium, likelihood_high = 0.15, 0.7, 0.15
     else:
-        return 20
+        likelihood_low, likelihood_medium, likelihood_high = 0.05, 0.2, 0.75
+
+    post_low = prior_low * likelihood_low
+    post_medium = prior_medium * likelihood_medium
+    post_high = prior_high * likelihood_high
+
+    total = post_low + post_medium + post_high
+
+    post_low /= total
+    post_medium /= total
+    post_high /= total
+
+    if post_low >= post_medium and post_low >= post_high:
+        return "Low", 10
+    elif post_medium >= post_high:
+        return "Moderate", 15
+    else:
+        return "High", 20
 
 
 def send_command(command, green_time=0):
@@ -155,6 +198,30 @@ def get_countdown():
         seconds = 0
 
     return phase, seconds
+
+def log_data(
+    road_a_count,
+    road_b_count,
+    road_a_score,
+    road_b_score,
+    active_road,
+    green_time,
+    phase,
+    emergency
+):
+    with open(LOG_FILE, 'a', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"),
+            road_a_count,
+            road_b_count,
+            round(road_a_score, 2),
+            round(road_b_score, 2),
+            active_road,
+            green_time,
+            phase,
+            "ON" if emergency else "OFF"
+        ])
 
 
 # ==========================================================
@@ -248,26 +315,64 @@ while True:
     if accident:
         status = f"EMERGENCY - ROAD {emergency_road}"
         command = f"EMERGENCY,{emergency_road}"
-        send_command(command)
+        command_sent = send_command(command)
+        green_time = 0
 
     else:
-        if current_road == 'A':
+        scheduled_road = current_road
+
+        if scheduled_road == 'A':
             selected_score = road_a_score
         else:
             selected_score = road_b_score
 
-        green_time = get_green_time(selected_score)
+        congestion_level,green_time = bayesian_congestion(selected_score)
 
-        status = f"ROAD {current_road} GREEN ({green_time}s)"
-        command = f"{current_road},{green_time}"
+        status = (
+            f"ROAD {scheduled_road} GREEN "
+            f"({green_time}s) - {congestion_level}"
+        )
+        command = f"{scheduled_road},{green_time}"
 
-        send_command(command, green_time)
+        command_sent = send_command(command, green_time)
+
 
     # ------------------------------------------------------
     # COUNTDOWN
     # ------------------------------------------------------
     phase, seconds_left = get_countdown()
-
+    
+    # Log only when a normal GREEN command is sent
+    if (
+        command_sent
+        and not accident
+        and green_time > 0
+        and phase == "GREEN"
+    ):
+        log_data(
+            road_a_count=road_a_count,
+            road_b_count=road_b_count,
+            road_a_score=road_a_score,
+            road_b_score=road_b_score,
+            active_road=active_road,
+            green_time=green_time,
+            phase="GREEN",
+            emergency=False
+        )
+    elif (
+        command_sent
+        and accident
+    ):
+        log_data(
+            road_a_count=road_a_count,
+            road_b_count=road_b_count,
+            road_a_score=road_a_score,
+            road_b_score=road_b_score,
+            active_road=emergency_road,
+            green_time=0,
+            phase="EMERGENCY",
+            emergency=True
+        )
     # ------------------------------------------------------
     # DRAW SPLIT LINE
     # ------------------------------------------------------

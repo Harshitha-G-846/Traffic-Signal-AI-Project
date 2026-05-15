@@ -36,7 +36,7 @@ VEHICLE_WEIGHTS = {
 
 # Timing constants
 YELLOW_TIME = 2
-ALL_RED_TIME = 4
+ALL_RED_TIME = 1
 
 LOG_FILE = "traffic_log.csv"
 
